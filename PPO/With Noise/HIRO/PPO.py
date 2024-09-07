@@ -266,7 +266,7 @@ while t_so_far < total_timesteps:
     rewards.append(rew)
     #     avg_rewards.append(np.mean(rewards[-10:]))
 
-    np.savetxt("C:\\Users\\Nikita\\Objective 3\\CSTR_PPO.csv", CSTR_PPO, delimiter=",")
+    np.savetxt("CSTR_PPO.csv", CSTR_PPO, delimiter=",")
 
 torch.save(model1.state_dict(), 'pretrain_PPO.pt')
 
