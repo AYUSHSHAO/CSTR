@@ -72,7 +72,7 @@ def CSTR(action, ti, x0):
     E = y[99, 4]
 
     rewards = -np.abs((All[2] - 0.143))
-
+    return All, rewards
     # def get_state(action, t, x):
     #     w = []
     #     w.append(action)
@@ -224,6 +224,7 @@ while t_so_far < total_timesteps:
     lo = 0
     while t < 4:
         ep_rews = []
+        t_so_far = t_so_far + 1
         obs = [0, 3.45, 0, 0, 75]
         ep_t = 0
         while ep_t < 80:
