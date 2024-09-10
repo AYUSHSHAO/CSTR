@@ -247,6 +247,8 @@ while t_so_far < total_timesteps:
             batch_log_probs.append(log_prob)
             t = t + 0.05
         batch_rews.append(ep_rews)
+        T = 4
+        plot_G(propylene_glycol, flowrate)
     batch_obs = torch.tensor(batch_obs, dtype=torch.float)
     batch_acts = torch.tensor(batch_acts, dtype=torch.float)
     batch_log_probs = torch.tensor(batch_log_probs, dtype=torch.float)
@@ -255,7 +257,7 @@ while t_so_far < total_timesteps:
     T = 4
     lo = math.sqrt(lo / 80)
     print(lo)
-    plot_G(propylene_glycol, flowrate)
+
     V, _ = Evaluate(batch_obs, batch_acts)
     A_k = batch_rtgs - torch.squeeze(V.T, 0).detach()
     A_k = (A_k - A_k.mean()) / (A_k.std() + 1e-10)
