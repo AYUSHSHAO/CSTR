@@ -281,6 +281,7 @@ class Critic_High(nn.Module):
         )
 
     def forward(self, state, goal):
+
         return self.critic(torch.cat([state, goal], 1))
 
 
@@ -666,7 +667,7 @@ class HAC:
         while time < tot_time:
             steps = steps + 1
             action = self.HAC[i_level - 1].select_action_Low(state, goal)  # action taken by lower level policy
-            
+
             # action = norm_action(action)
 
             action = action + np.random.normal(1, self.exploration_action_noise)

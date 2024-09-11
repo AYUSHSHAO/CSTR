@@ -156,7 +156,7 @@ class HAC:
     
     
     def run_HAC(self, env, i_level, state, tot_time, test):
-        print("HII")
+
         time = 0.01
         dt = 0.05
 
@@ -190,7 +190,7 @@ class HAC:
             # 2.2.2 interact environment
             #print("state", state)
             next_state, reward = env(action,time, state)
-            print("state type", type(next_state))
+
             self.lo += (np.abs(next_state[2] - final_goal) ** 2)
             self.iae += (np.abs(next_state[2] - final_goal))
 
@@ -205,7 +205,7 @@ class HAC:
             intri_reward = self.intrinsic_reward(state, goal, next_state)
             self.reward += reward
             next_goal = self.h_function(next_state, state, goal, self.goal_index)
-            print("next goal type from h function", type(next_goal))
+
             #next_goal = next_goal.clip(self.state_clip_low[self.goal_index], self.state_clip_high[self.goal_index])
 
             #print("next goal shape",next_goal.shape)
@@ -230,7 +230,7 @@ class HAC:
             if (steps + 1) % self.c == 0 and steps > 0:
 
                 next_goal = self.HAC[i_level].select_action_High(state)
-                print("next goal type from higher policy", type(next_goal))
+
                 next_goal = next_goal + np.random.normal(0, self.exploration_state_noise)
                 next_goal = next_goal.clip(self.state_clip_low[self.goal_index] , self.state_clip_high[self.goal_index])
 

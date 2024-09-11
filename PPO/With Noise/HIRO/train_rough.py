@@ -268,16 +268,19 @@ class Critic_High(nn.Module):
         )
 
     def forward(self, state, goal):
+        print("state shape",state.shape)
+        print("goal shape", goal.shape)
+       # print("shape of cat",torch.cat([state, goal]).shape)
         return self.critic(torch.cat([state, goal], 1))
 
 
 class DDPG_Low:
-    def __init__(self, state_dim, action_dim, goal_dim, action_bounds, action_offset, policy_freq, tau, gamma, lr):
+    def __init__(self, state_dim, action_dim, goal_dim, action_bounds, action_offset, clip_low, tau, gamma, lr):
 
         ################### For Lower Level Policy############################
         self.gamma = gamma
         self.tau = tau
-        self.policy_freq = policy_freq
+        self.clip_low = clip_low
         self.goal_dim = goal_dim # as goal is the state which our agent should acheive
         self.actor_Low = Actor_Low(state_dim, action_dim, self.goal_dim, action_bounds, action_offset).to(device)
         self.actor_Low_target = Actor_Low(state_dim, action_dim, self.goal_dim, action_bounds, action_offset).to(device)
@@ -314,7 +317,7 @@ class DDPG_Low:
 
         return abs(self.actor_Low(state, goal).sample().detach().cpu().data.numpy().flatten())
 
-    def update_Low(self, ppo_epochs, batch_obs_state, batch_obs_goal, batch_acts, ep_rews, clip):
+    def update_Low(self, ppo_epochs, batch_obs_state, batch_obs_goal, batch_acts, ep_rews):
         batch_log_probs = self.actor_Low(batch_obs_state, batch_obs_goal).log_prob(batch_acts)
         batch_rtgs = self.compute_rtgs(ep_rews, self.gamma)
         V, _ = self.Evaluate(batch_obs_state, batch_obs_goal, batch_acts)
@@ -324,7 +327,7 @@ class DDPG_Low:
             V, curr_log_probs = self.Evaluate(batch_obs_state, batch_obs_goal, batch_acts)
             ratios = torch.exp(curr_log_probs - batch_log_probs)
             surr1 = ratios * A_k
-            surr2 = torch.clamp(ratios, 1.0 - clip, 1.0 + clip) * A_k
+            surr2 = torch.clamp(ratios, 1.0 - self.clip_low, 1.0 + self.clip_low) * A_k
             actor_loss = - (torch.min(surr1, surr2).mean())
             # critic_loss = nn.MSELoss()(V, batch_rtgs)
             critic_loss = (batch_rtgs - torch.squeeze(V.T, 0)).pow(2).mean()
@@ -460,22 +463,25 @@ class DDPG_High:
 
 class HAC:
     def __init__(self, k_level, policy_freq, tau, c, state_dim, action_dim, goal_dim, goal_index, goal, render,
-                 threshold,
-                 action_offset, state_offset, action_bounds, state_bounds, max_goal, lr):
+                 threshold, action_offset, state_offset, action_bounds, state_bounds, max_goal,
+                 action_policy_noise, state_policy_noise, clip_low, state_policy_clip, gamma, lr):
 
         # adding the lowest level
 
+        # adding the lowest level
 
-        self.HAC = [DDPG_Low(state_dim, action_dim, goal_dim, action_bounds, action_offset, policy_freq, tau, lr)]
+        self.HAC = [DDPG_Low(state_dim, action_dim, goal_dim, action_bounds, action_offset, clip_low, tau,
+                             gamma, lr)]
         self.replay_buffer = [ReplayBuffer_Low()]
 
         # adding remaining levels
         for _ in range(k_level - 1):
-            self.HAC.append(
-                DDPG_High(state_dim, goal_dim, goal_index, state_bounds, state_offset, policy_freq, tau, lr))
+            self.HAC.append(DDPG_High(state_dim, goal_dim, goal_index, state_bounds, state_offset, policy_freq, tau,
+                                      state_policy_noise, state_policy_clip, lr))
             self.replay_buffer.append(ReplayBuffer_High())
 
         # set some parameters
+        self.gamma = gamma
         self.goal_dim = goal_dim
         self.goal_index = goal_index
         self.max_goal = max_goal
@@ -503,11 +509,11 @@ class HAC:
         self.flowrate = []
         self.solved = False
 
-    def set_parameters(self, lamda, gamma, n_iter, batch_size, action_clip_low, action_clip_high,
+    def set_parameters(self, lamda, ppo_epochs, n_iter, batch_size, action_clip_low, action_clip_high,
                        state_clip_low, state_clip_high, exploration_action_noise, exploration_state_noise):
 
         self.lamda = lamda
-        self.gamma = gamma
+        self.ppo_epochs = ppo_epochs
         self.n_iter = n_iter
         self.batch_size = batch_size
         self.action_clip_low = action_clip_low
@@ -538,7 +544,7 @@ class HAC:
                     candidates]
 
         sequence = torch.stack(sequence).float().t().unsqueeze(2)
-        b = state_sequence
+
 
         surr_prob = [
             -functional.mse_loss(action_sequence, actor(state_sequence.to(torch.float32), sequence[:, candidate])) for
@@ -630,7 +636,7 @@ class HAC:
             next_state = np.array([next_state])
 
             self.ep_rews.append(reward)
-            print("state type", type(next_state))
+
             next_state_noise_2 = np.random.normal(next_state[:, 2], 0.01 * next_state[:, 2])
             next_state_noise = np.concatenate((next_state[:, :2], np.array([next_state_noise_2]), next_state[:, 3:]), 1)
             next_obs_noise = next_state_noise[0]
@@ -648,7 +654,7 @@ class HAC:
             self.reward += reward
             next_goal = self.h_function(next_obs_noise, state, goal, self.goal_index)
             self.batch_obs_goal.append(torch.from_numpy(next_goal))
-            print("next goal type from h function", type(next_goal))
+
             # next_goal = next_goal.clip(self.state_clip_low[self.goal_index], self.state_clip_high[self.goal_index])
 
             # print("next goal shape",next_goal.shape)
@@ -662,9 +668,7 @@ class HAC:
             goal_sequence.append(goal)
             reward_h_sequence.append(reward_h)
 
-            # update the DDPG parameters
-            if len(self.replay_buffer[i_level - 1].buffer) > self.batch_size:
-                self.update(i_level - 1, self.n_iter, self.batch_size)
+
             # experience_buffer_l.add(state, goal, action, intri_reward, next_state, next_goal, done_l)
             # 2.2.5 record segment arguments
 
@@ -673,7 +677,7 @@ class HAC:
             if (steps + 1) % self.c == 0 and steps > 0:
 
                 next_goal = self.HAC[i_level].select_action_High(state)
-                print("next goal type from higher policy", type(next_goal))
+
                 next_goal = next_goal + np.random.normal(0, self.exploration_state_noise)
                 next_goal = next_goal.clip(self.state_clip_low[self.goal_index], self.state_clip_high[self.goal_index])
 
@@ -697,12 +701,12 @@ class HAC:
                 # 2.2.9 reset segment arguments & log (reward)
 
             # 2.2.10 update observations
-            state = next_state
+            state = next_obs_noise
             goal = next_goal
 
             time = time + dt
 
-            goal_achieved = self.check_goal(next_state, final_goal, self.threshold)
+            goal_achieved = self.check_goal(state, final_goal, self.threshold)
             # if goal_achieved and Train == True:
             # print("goal achieved in steps",t)
             # show_goal_achieve = False
@@ -714,15 +718,16 @@ class HAC:
         self.batch_obs_goal = torch.tensor(self.batch_obs_goal, dtype=torch.float)
         self.batch_acts = torch.tensor(self.batch_acts, dtype=torch.float)
 
+        # update the DDPG parameters
+        self.HAC[i_level-1].update_Low(self.ppo_epochs, self.batch_obs_state, self.batch_obs_goal, self.batch_acts, self.ep_rews)
+
 
         return next_state
 
     def update(self, k_level, n_iter, batch_size):
         # def update(self, n_iter, batch_size):
         # for i in range(self.k_level):
-        if k_level == 0:
-            self.HAC[k_level].update_Low(self.replay_buffer[k_level], n_iter, batch_size)
-        else:
+
             self.HAC[k_level].update_High(self.replay_buffer[k_level], n_iter, batch_size)
 
     def save(self, directory, name):
@@ -812,13 +817,15 @@ def train():
     gamma = 0.95  # discount factor for future rewards
     # n_iter = 100                # update policy n_iter times in one DDPG update
     # changing the n_iter from 100 to 6
-    n_iter = 6
+    n_iter = 10
+    ppo_epochs = 10
     # batch_size = 100            # num of transitions sampled from replay buffer
     # changing batch size from 100 to 5
     batch_size = 5
     lr = 0.001
     policy_freq = 2  # policy frequency to update TD3
     tau = 0.005
+
 
     # save trained models
     directory = "./preTrained/{}/{}level/".format(env_name, k_level)
@@ -833,8 +840,8 @@ def train():
 
     agent = HAC(k_level, policy_freq, tau, c, state_dim, action_dim, goal_dim, goal_index, goal, render, threshold,
                 action_offset, state_offset, action_bounds, state_bounds, max_goal, action_policy_noise,
-                state_policy_noise, action_policy_clip, state_policy_clip, lr)
-    agent.set_parameters(lamda, gamma, n_iter, batch_size, action_clip_low, action_clip_high,
+                state_policy_noise, action_policy_clip, state_policy_clip, gamma, lr)
+    agent.set_parameters(lamda, ppo_epochs, n_iter, batch_size, action_clip_low, action_clip_high,
                          state_clip_low, state_clip_high, exploration_action_noise, exploration_state_noise)
 
     # logging file:
