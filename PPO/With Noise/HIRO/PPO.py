@@ -151,6 +151,7 @@ gamma = 0.99
 def compute_rtgs(batch_rews):
     batch_rtgs = []
     for ep_rews in reversed(batch_rews):
+
         discounted_reward = 0
         for rew in reversed(ep_rews):
             discounted_reward = rew + discounted_reward * gamma
@@ -209,6 +210,7 @@ returns = []
 total_timesteps = 1000000
 y=0
 while t_so_far < total_timesteps:
+
     y = y+1
     print(y)
     batch_obs = []
@@ -252,6 +254,7 @@ while t_so_far < total_timesteps:
     batch_obs = torch.tensor(batch_obs, dtype=torch.float)
     batch_acts = torch.tensor(batch_acts, dtype=torch.float)
     batch_log_probs = torch.tensor(batch_log_probs, dtype=torch.float)
+    #print(batch_rews)
     batch_rtgs = compute_rtgs(batch_rews)
     dt = 0.05
     T = 4

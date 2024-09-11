@@ -26,6 +26,8 @@ class HAC:
                  action_offset, state_offset, action_bounds, state_bounds, max_goal, lr):
 
         # adding the lowest level
+
+
         self.HAC = [DDPG_Low(state_dim, action_dim, goal_dim, action_bounds, action_offset, policy_freq, tau, lr)]
         self.replay_buffer = [ReplayBuffer_Low()]
 
@@ -51,6 +53,10 @@ class HAC:
 
         # logging parameters
         self.goals = [None] * self.k_level
+        self.batch_obs_state = []
+        self.batch_obs_goal = []
+        self.batch_acts = []
+        self.ep_rews = []
         self.reward = 0
         self.lo = 0
         self.iae = 0
@@ -174,7 +180,8 @@ class HAC:
             steps = steps + 1
             action = self.HAC[i_level - 1].select_action_Low(state, goal)  # action taken by lower level policy
             # action = norm_action(action)
-
+            self.batch_obs_state.append(torch.from_numpy(state))
+            self.batch_acts.append(torch.from_numpy(action))
             action = action + np.random.normal(0, self.exploration_action_noise)
             action = action.clip(self.action_clip_low, self.action_clip_high)
             # action = np.array([0.000000000000000000001])
@@ -182,25 +189,34 @@ class HAC:
             # 2.2.2 interact environment
             # print("state", state)
             next_state, reward = env(action, time, state)
-            self.lo += (np.abs(next_state[2] - final_goal) ** 2)
-            self.iae += (np.abs(next_state[2] - final_goal))
+            next_state = np.array([next_state])
 
-            self.propylene_glycol.append(next_state[2])
+            self.ep_rews.append(reward)
+            print("state type", type(next_state))
+            next_state_noise_2 = np.random.normal(next_state[:, 2], 0.01 * next_state[:, 2])
+            next_state_noise = np.concatenate((next_state[:, :2], np.array([next_state_noise_2]), next_state[:, 3:]), 1)
+            next_obs_noise = next_state_noise[0]
+            self.lo += (np.abs(next_state_noise_2 - final_goal) ** 2)
+            self.iae += (np.abs(next_state_noise_2 - final_goal))
+
+            self.propylene_glycol.append(next_obs_noise[2])
             self.flowrate.append(action[0])
 
             # 2.2.3 compute step arguments
             # reward_h = self.dense_reward(state,final_goal)
             reward_h = reward
 
-            intri_reward = self.intrinsic_reward(state, goal, next_state)
+            intri_reward = self.intrinsic_reward(state, goal, next_obs_noise)
             self.reward += reward
-            next_goal = self.h_function(next_state, state, goal, self.goal_index)
+            next_goal = self.h_function(next_obs_noise, state, goal, self.goal_index)
+            self.batch_obs_goal.append(torch.from_numpy(next_goal))
+            print("next goal type from h function", type(next_goal))
             # next_goal = next_goal.clip(self.state_clip_low[self.goal_index], self.state_clip_high[self.goal_index])
 
             # print("next goal shape",next_goal.shape)
             # print("goal", next_goal)
             # 2.2.4 collect low-level experience
-            self.replay_buffer[i_level - 1].add((state, action, goal, intri_reward, next_state, next_goal, self.gamma))
+            self.replay_buffer[i_level - 1].add((state, action, goal, intri_reward, next_obs_noise, next_goal, self.gamma))
 
             state_sequence.append(torch.from_numpy(state))
             action_sequence.append(torch.from_numpy(action))
@@ -219,6 +235,7 @@ class HAC:
             if (steps + 1) % self.c == 0 and steps > 0:
 
                 next_goal = self.HAC[i_level].select_action_High(state)
+                print("next goal type from higher policy", type(next_goal))
                 next_goal = next_goal + np.random.normal(0, self.exploration_state_noise)
                 next_goal = next_goal.clip(self.state_clip_low[self.goal_index], self.state_clip_high[self.goal_index])
 
@@ -254,6 +271,11 @@ class HAC:
             # break
             if goal_achieved and test == True:
                 self.solved = True
+
+        self.batch_obs_state = torch.tensor(self.batch_obs_state, dtype=torch.float)
+        self.batch_obs_goal = torch.tensor(self.batch_obs_goal, dtype=torch.float)
+        self.batch_acts = torch.tensor(self.batch_acts, dtype=torch.float)
+
 
         return next_state
 

@@ -1,24 +1,26 @@
 import torch
 from gym import spaces
-#import asset
+# import asset
 import math
 import numpy as np
 from scipy.integrate import odeint
-#from HAC import HAC
+
+# from HAC import HAC
 import matplotlib.pyplot as plt
 from transesterification import get_state
-#from CSTR import CSTR
+# from CSTR import CSTR
 import random
 import torch.nn as nn
 import torch.optim as optim
 from torch import Tensor
 from torch.nn import functional
+import torch.nn.functional as F
+from torch.distributions import Normal
 import copy
+
 pow = math.pow
 exp = np.exp
 tanh = np.tanh
-
-
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
@@ -26,7 +28,6 @@ seed = 12369
 random.seed(seed)
 torch.manual_seed(seed)
 np.random.seed(seed)
-
 
 global dt
 dt = 0.05
@@ -85,7 +86,6 @@ def CSTR(action, ti, x0):
     return All, rewards
 
 
-
 x0 = [0, 3.45, 0, 0, 75]
 high = np.array([10, 10, 10, 10, 200])
 
@@ -101,8 +101,6 @@ action_space = spaces.Box(
     high=high,
     dtype=np.float32
 )
-
-
 
 
 def plot_G(propylene_glycol, tot_time, flowrate, name):
@@ -133,10 +131,8 @@ def plot_G(propylene_glycol, tot_time, flowrate, name):
     fig.tight_layout()  # otherwise the right y-label is slightly clipped
     # plt.savefig('deeprl_test1_batch1.jpg')
 
-    plt.savefig(name+'.png')
+    plt.savefig(name + '.png')
     plt.close()
-
-
 
 
 class ReplayBuffer_Low:
@@ -209,29 +205,24 @@ class ReplayBuffer_High:
 class Actor_Low(nn.Module):
     def __init__(self, state_dim, action_dim, goal_dim, action_bound, action_offset):
         super(Actor_Low, self).__init__()
-        # actor
-        self.actor = nn.Sequential(
-            nn.Linear(state_dim + goal_dim, 64),
-            nn.ReLU(),
-            nn.Linear(64, 64),
-            nn.ReLU(),
-            nn.Linear(64, action_dim),
-            nn.Tanh()
-        )
-        # max value of actions
-
-        self.offset = action_offset
-        self.bounds = action_bound
+        self.fc1 = nn.Linear(state_dim + goal_dim, 10)
+        self.mu_head = nn.Linear(10, 1)
+        self.sigma_head = nn.Linear(10, action_dim)
 
     def forward(self, state, goal):
-
-        #return self.actor(torch.cat([state, goal], 1))
-
-        return self.actor(torch.cat([state, goal], 1))#*self.bounds + self.offset
+        x = torch.cat([state, goal], 1)
+        x1 = torch.sigmoid(self.fc1(x))
+        mu = 160 * (abs(self.mu_head(x1)))
+        #         sigma = (torch.exp((torch.tanh(self.sigma_head(x1)))))
+        #         mu = 80*(abs(self.mu_head(x2)))
+        #         # sigma = torch.exp((F.tanh(self.sigma_head(x1))))
+        sigma = 2 * (abs(self.sigma_head(x1)))
+        return Normal(mu, sigma)
 
 
 class Actor_High(nn.Module):
-    def __init__(self, state_dim, goal_dim, goal_index, state_bound, state_offset): # goal_dim as goal is the action taken by the higher level policy
+    def __init__(self, state_dim, goal_dim, goal_index, state_bound,
+                 state_offset):  # goal_dim as goal is the action taken by the higher level policy
         super(Actor_High, self).__init__()
         # actor
         self.actor = nn.Sequential(
@@ -245,31 +236,27 @@ class Actor_High(nn.Module):
         # max value of actions
         self.offset = state_offset
         self.bounds = state_bound
-        self.offset = state_offset[:,goal_index]
-        self.bounds = state_bound[:,goal_index]
+        self.offset = state_offset[:, goal_index]
+        self.bounds = state_bound[:, goal_index]
 
     def forward(self, state):
-        return self.actor(state)*self.bounds + self.offset
+        return self.actor(state) * self.bounds + self.offset
 
 
 class Critic_Low(nn.Module):
-    def __init__(self, state_dim, action_dim, goal_dim):
+    def __init__(self,state_dim):
         super(Critic_Low, self).__init__()
-        # UVFA critic
-        self.critic = nn.Sequential(
-            nn.Linear(state_dim + action_dim + goal_dim, 64),
-            nn.ReLU(),
-            nn.Linear(64, 64),
-            nn.ReLU(),
-            nn.Linear(64, 1)
-        )
+        self.fc = nn.Linear(state_dim, 10)
+        self.v_head = nn.Linear(10, 1)
 
-    def forward(self, state, action, goal):
-        return self.critic(torch.cat([state, action, goal], 1))
+    def forward(self, state):
+        x = F.relu(self.fc(state))
+        state_value = self.v_head(x)
+        return state_value
 
 
 class Critic_High(nn.Module):
-    def __init__(self, state_dim, goal_dim): # goal_dim as goal is the action taken by the higher level policy
+    def __init__(self, state_dim, goal_dim):  # goal_dim as goal is the action taken by the higher level policy
         super(Critic_High, self).__init__()
         # UVFA critic
         self.critic = nn.Sequential(
@@ -285,29 +272,38 @@ class Critic_High(nn.Module):
 
 
 class DDPG_Low:
-    def __init__(self, state_dim, action_dim, goal_dim, action_bounds, action_offset, policy_freq, tau, action_policy_noise, action_policy_clip, lr):
+    def __init__(self, state_dim, action_dim, goal_dim, action_bounds, action_offset, policy_freq, tau, gamma, lr):
 
         ################### For Lower Level Policy############################
-        self.action_policy_noise = action_policy_noise
-        self.action_policy_clip = action_policy_clip
-        self.action_offset = action_offset
-        self.action_bounds = action_bounds
+        self.gamma = gamma
         self.tau = tau
         self.policy_freq = policy_freq
         self.goal_dim = goal_dim # as goal is the state which our agent should acheive
-        self.actor_Low = Actor_Low(state_dim, action_dim, self.goal_dim, self.action_bounds, self.action_offset).to(device)
-        self.actor_Low_target = Actor_Low(state_dim, action_dim, self.goal_dim, self.action_bounds, self.action_offset).to(device)
-        self.actor_optimizer = optim.Adam(self.actor_Low.parameters(), lr=lr)
+        self.actor_Low = Actor_Low(state_dim, action_dim, self.goal_dim, action_bounds, action_offset).to(device)
+        self.actor_Low_target = Actor_Low(state_dim, action_dim, self.goal_dim, action_bounds, action_offset).to(device)
+        self.actor_Low_optimizer = optim.Adam(self.actor_Low.parameters(), lr=lr)
         # two critics for TD3 learning
-        self.critic_Low_1 = Critic_Low(state_dim, action_dim, self.goal_dim).to(device)
-        self.critic_Low_target_1 = Critic_Low(state_dim, action_dim, self.goal_dim).to(device)
-        self.critic_Low_1_optimizer = optim.Adam(self.critic_Low_1.parameters(), lr=lr)
-
-        self.critic_Low_2 = Critic_Low(state_dim, action_dim, self.goal_dim).to(device)
-        self.critic_Low_target_2 = Critic_Low(state_dim, action_dim, self.goal_dim).to(device)
-        self.critic_Low_2_optimizer = optim.Adam(self.critic_Low_2.parameters(), lr=lr)
+        self.critic_Low = Critic_Low(state_dim).to(device)
+        self.critic_Low_target = Critic_Low(state_dim).to(device)
+        self.critic_Low_optimizer = optim.Adam(self.critic_Low.parameters(), lr=lr)
 
         self.mseLoss = torch.nn.MSELoss()
+
+    def compute_rtgs(self, ep_rews, gamma):
+        batch_rtgs = []
+        discounted_reward = 0
+        for rew in reversed(ep_rews):
+            discounted_reward = rew + discounted_reward * gamma
+            batch_rtgs.insert(0, discounted_reward)
+        batch_rtgs = torch.tensor(batch_rtgs, dtype=torch.float)
+
+        return batch_rtgs
+
+    def Evaluate(self, batch_obs_state,batch_obs_goal, batch_acts):
+        dist = self.actor_Low(batch_obs_state,batch_obs_goal)
+        V = self.critic_Low(batch_obs_state)
+        log_probs = dist.log_prob(torch.unsqueeze(batch_acts, 1))
+        return V, log_probs.squeeze()
 
 
 
@@ -316,101 +312,45 @@ class DDPG_Low:
         state = torch.FloatTensor(state.reshape(1, -1)).to(device)
         goal = torch.FloatTensor(goal.reshape(1, -1)).to(device)
 
-        return self.actor_Low(state, goal).detach().cpu().data.numpy().flatten()
+        return abs(self.actor_Low(state, goal).sample().detach().cpu().data.numpy().flatten())
 
-    def norm_action(self, action):
-        low = -1
-        high = 1
-
-        action = ((action - low) / (high - low))
-
-        action = 78 + action
-
-        return action
-
-
-    def update_Low(self, buffer, n_iter, batch_size):
-        for i in range(n_iter):
-            # Sample a batch of transitions from replay buffer:
-            state, action, goal, reward, next_state, next_goal, gamma = buffer.sample(batch_size)
-
-            # convert np arrays into tensors
-            state = torch.FloatTensor(state).to(device)
-            action = torch.FloatTensor(action).to(device)
-            next_goal = torch.FloatTensor(next_goal).to(device)
-            reward = torch.FloatTensor(reward).reshape((batch_size, 1)).to(device)
-            next_state = torch.FloatTensor(next_state).to(device)
-            goal = torch.FloatTensor(goal).to(device)
-            gamma = torch.FloatTensor(gamma).reshape((batch_size, 1)).to(device)
-
-            # select next action
-            noise = action.data.normal_(0, self.action_policy_noise.item()).to(device)
-            noise = noise.clamp(-torch.from_numpy(self.action_policy_clip), torch.from_numpy(self.action_policy_clip))
-
-            next_action = self.actor_Low_target(next_state, next_goal).detach()
-            next_action = self.norm_action(next_action)
-            next_action = (next_action + noise).clamp(self.action_offset, self.action_offset+self.action_bounds).to(torch.float32)
-            # take the minimum of 2 q-values ---> TD3
-
-            target_Q1 = self.critic_Low_target_1(next_state, next_action, next_goal).detach()
-            target_Q2 = self.critic_Low_target_2(next_state, next_action, next_goal).detach()
-            target_Q = torch.min(target_Q1, target_Q2)
-            # Compute target Q-value:
-            target_Q = reward + gamma * target_Q
-
-            current_Q1 = self.critic_Low_1(state, action, goal)
-            current_Q2 = self.critic_Low_2(state, action, goal)
-
-            # Optimize Critic:
-            critic_loss1 = self.mseLoss(current_Q1, target_Q)
-            self.critic_Low_1_optimizer.zero_grad()
-            critic_loss1.backward()
-            self.critic_Low_1_optimizer.step()
-
-            critic_loss2 = self.mseLoss(current_Q2, target_Q)
-            self.critic_Low_2_optimizer.zero_grad()
-            critic_loss2.backward()
-            self.critic_Low_2_optimizer.step()
-
-
-
-            if i % self.policy_freq == 0:
-
-                # Compute actor loss:
-                actor_loss = -self.critic_Low_1(state, self.actor_Low(state, goal), goal).mean()
-
-                # Optimize the actor
-                self.actor_optimizer.zero_grad()
-                actor_loss.backward()
-                self.actor_optimizer.step()
-
-                for param, target_param in zip(self.actor_Low.parameters(), self.actor_Low_target.parameters()):
-                    target_param.data.copy_(self.tau * param.data + (1 - self.tau) * target_param.data)
-
-                for param, target_param in zip(self.critic_Low_1.parameters(), self.critic_Low_target_1.parameters()):
-                    target_param.data.copy_(self.tau * param.data + (1 - self.tau) * target_param.data)
-
-                for param, target_param in zip(self.critic_Low_2.parameters(), self.critic_Low_target_2.parameters()):
-                    target_param.data.copy_(self.tau * param.data + (1 - self.tau) * target_param.data)
-
+    def update_Low(self, ppo_epochs, batch_obs_state, batch_obs_goal, batch_acts, ep_rews, clip):
+        batch_log_probs = self.actor_Low(batch_obs_state, batch_obs_goal).log_prob(batch_acts)
+        batch_rtgs = self.compute_rtgs(ep_rews, self.gamma)
+        V, _ = self.Evaluate(batch_obs_state, batch_obs_goal, batch_acts)
+        A_k = batch_rtgs - torch.squeeze(V.T, 0).detach()
+        A_k = (A_k - A_k.mean()) / (A_k.std() + 1e-10)
+        for i in range(ppo_epochs):
+            V, curr_log_probs = self.Evaluate(batch_obs_state, batch_obs_goal, batch_acts)
+            ratios = torch.exp(curr_log_probs - batch_log_probs)
+            surr1 = ratios * A_k
+            surr2 = torch.clamp(ratios, 1.0 - clip, 1.0 + clip) * A_k
+            actor_loss = - (torch.min(surr1, surr2).mean())
+            # critic_loss = nn.MSELoss()(V, batch_rtgs)
+            critic_loss = (batch_rtgs - torch.squeeze(V.T, 0)).pow(2).mean()
+            self.actor_Low_optimizer.zero_grad()
+            actor_loss.backward(retain_graph=True)
+            self.actor_Low_optimizer.step()
+            self.critic_Low_optimizer.zero_grad()
+            critic_loss.backward()
+            self.critic_Low_optimizer.step()
 
 
 
     def save(self, directory, name):
         torch.save(self.actor_Low.state_dict(), '%s/%s_actor_Low.pth' % (directory, name))
-        torch.save(self.critic_Low_1.state_dict(), '%s/%s_critic_Low_1.pth' % (directory, name))
-        torch.save(self.critic_Low_2.state_dict(), '%s/%s_critic_Low_2.pth' % (directory, name))
+        torch.save(self.critic_Low.state_dict(), '%s/%s_critic_Low.pth' % (directory, name))
 
 
     def load(self, directory, name):
         self.actor_Low.load_state_dict(torch.load('%s/%s_actor_Low.pth' % (directory, name), map_location='cpu'))
-        self.critic_Low_1.load_state_dict(torch.load('%s/%s_critic_Low_1.pth' % (directory, name), map_location='cpu'))
-        self.critic_Low_2.load_state_dict(torch.load('%s/%s_critic_Low_2.pth' % (directory, name), map_location='cpu'))
+        self.critic_Low.load_state_dict(torch.load('%s/%s_critic_Low.pth' % (directory, name), map_location='cpu'))
 
 
 
 class DDPG_High:
-    def __init__(self, state_dim, goal_dim, goal_index, state_bound, state_offset, policy_freq, tau, state_policy_noise, state_policy_clip, lr):
+    def __init__(self, state_dim, goal_dim, goal_index, state_bound, state_offset, policy_freq, tau, state_policy_noise,
+                 state_policy_clip, lr):
 
         ################### For Higher Level_Policy############################
         self.state_bound = state_bound
@@ -434,18 +374,15 @@ class DDPG_High:
 
         self.mseLoss = torch.nn.MSELoss()
 
-
-
     def select_action_High(self, state):
         # print(type(state))
         state = torch.FloatTensor(state.reshape(1, -1)).to(device)
         return self.actor_High(state).detach().cpu().data.numpy().flatten()
 
-
     def update_High(self, buffer, n_iter, batch_size):
         for i in range(n_iter):
             # Sample a batch of transitions from replay buffer:
-            state,  goal, reward, next_state, gamma = buffer.sample(batch_size)
+            state, goal, reward, next_state, gamma = buffer.sample(batch_size)
 
             # convert np arrays into tensors
             state = torch.FloatTensor(state).to(device)
@@ -461,9 +398,10 @@ class DDPG_High:
 
             next_goal = self.actor_High_target(next_state).detach()
 
-            next_goal = (next_goal + noise).clamp(self.state_offset[:,self.goal_dim], self.state_offset[:,self.goal_dim] + self.state_bound[:,self.goal_dim]).to(
+            next_goal = (next_goal + noise).clamp(self.state_offset[:, self.goal_dim],
+                                                  self.state_offset[:, self.goal_dim] + self.state_bound[:,
+                                                                                        self.goal_dim]).to(
                 torch.float32)
-
 
             # take the minimum of 2 q-values ---> TD3
             target_Q1 = self.critic_High_target_1(next_state, next_goal).detach()
@@ -485,7 +423,6 @@ class DDPG_High:
             self.critic_High_2_optimizer.zero_grad()
             critic_loss2.backward()
             self.critic_High_2_optimizer.step()
-
 
             if i % self.policy_freq == 0:
 
@@ -515,10 +452,10 @@ class DDPG_High:
     def load(self, directory, name):
 
         self.actor_High.load_state_dict(torch.load('%s/%s_actor_High.pth' % (directory, name), map_location='cpu'))
-        self.critic_High_1.load_state_dict(torch.load('%s/%s_critic_High_1.pth' % (directory, name), map_location='cpu'))
-        self.critic_High_2.load_state_dict(torch.load('%s/%s_critic_High_2.pth' % (directory, name), map_location='cpu'))
-
-
+        self.critic_High_1.load_state_dict(
+            torch.load('%s/%s_critic_High_1.pth' % (directory, name), map_location='cpu'))
+        self.critic_High_2.load_state_dict(
+            torch.load('%s/%s_critic_High_2.pth' % (directory, name), map_location='cpu'))
 
 
 class HAC:
@@ -527,12 +464,14 @@ class HAC:
                  action_policy_noise, state_policy_noise, action_policy_clip, state_policy_clip, lr):
 
         # adding the lowest level
-        self.HAC = [DDPG_Low(state_dim, action_dim, goal_dim, action_bounds, action_offset, policy_freq, tau, action_policy_noise, action_policy_clip, lr)]
+        self.HAC = [DDPG_Low(state_dim, action_dim, goal_dim, action_bounds, action_offset, policy_freq, tau,
+                             action_policy_noise, action_policy_clip, lr)]
         self.replay_buffer = [ReplayBuffer_Low()]
 
         # adding remaining levels
         for _ in range(k_level - 1):
-            self.HAC.append(DDPG_High(state_dim, goal_dim, goal_index, state_bounds, state_offset, policy_freq, tau, state_policy_noise, state_policy_clip, lr))
+            self.HAC.append(DDPG_High(state_dim, goal_dim, goal_index, state_bounds, state_offset, policy_freq, tau,
+                                      state_policy_noise, state_policy_clip, lr))
             self.replay_buffer.append(ReplayBuffer_High())
 
         # set some parameters
@@ -572,7 +511,6 @@ class HAC:
         self.state_clip_high = state_clip_high
         self.exploration_action_noise = exploration_action_noise
         self.exploration_state_noise = exploration_state_noise
-
 
     def off_policy_correction(self, actor, action_sequence, state_sequence, goal_dim, goal_index, goal, end_state,
                               max_goal, device):
@@ -639,8 +577,6 @@ class HAC:
             return False
         return True
 
-
-
     def run_HAC(self, env, i_level, state, tot_time, test):
 
         time = 0.01
@@ -666,7 +602,7 @@ class HAC:
         while time < tot_time:
             steps = steps + 1
             action = self.HAC[i_level - 1].select_action_Low(state, goal)  # action taken by lower level policy
-            
+
             # action = norm_action(action)
 
             action = action + np.random.normal(1, self.exploration_action_noise)
@@ -681,7 +617,6 @@ class HAC:
             next_state_noise_2 = np.random.normal(next_state[:, 2], 0.01 * next_state[:, 2])
             next_state_noise = np.concatenate((next_state[:, :2], np.array([next_state_noise_2]), next_state[:, 3:]), 1)
             next_obs_noise = next_state_noise[0]
-
 
             self.lo += (np.abs(next_state_noise_2 - final_goal) ** 2)
             self.iae += (np.abs(next_state_noise_2 - final_goal))
@@ -701,7 +636,8 @@ class HAC:
             # print("next goal shape",next_goal.shape)
             # print("goal", next_goal)
             # 2.2.4 collect low-level experience
-            self.replay_buffer[i_level - 1].add((state, action, goal, intri_reward, next_obs_noise, next_goal, self.gamma))
+            self.replay_buffer[i_level - 1].add(
+                (state, action, goal, intri_reward, next_obs_noise, next_goal, self.gamma))
 
             state_sequence.append(torch.from_numpy(state))
             action_sequence.append(torch.from_numpy(action))
@@ -723,10 +659,12 @@ class HAC:
                 next_goal = next_goal + np.random.normal(0, self.exploration_state_noise)
                 next_goal = next_goal.clip(self.state_clip_low[self.goal_index], self.state_clip_high[self.goal_index])
 
-                actor_target_l =  copy.deepcopy(self.HAC[i_level - 1].actor_Low)
+                actor_target_l = copy.deepcopy(self.HAC[i_level - 1].actor_Low)
 
                 # off-policy correction
-                goal_hat, updated = self.off_policy_correction(actor_target_l, action_sequence, state_sequence, self.goal_dim, self.goal_index, goal_sequence[0], next_obs_noise, max_goal, device)
+                goal_hat, updated = self.off_policy_correction(actor_target_l, action_sequence, state_sequence,
+                                                               self.goal_dim, self.goal_index, goal_sequence[0],
+                                                               next_obs_noise, max_goal, device)
                 # print(goal_hat)
 
                 # self.replay_buffer[i_level].add(state, goal_hat, episode_reward_h, next_state, done_h)
@@ -775,18 +713,14 @@ class HAC:
             self.HAC[i].load(directory, name + '_level_{}'.format(i))
 
 
-
-
 def train():
     #################### Hyperparameters ####################
     env_name = "mAb_control"
 
     save_episode = 5  # keep saving every n episodes
-    max_episodes = 500            # max num of training episodes
+    max_episodes = 500  # max num of training episodes
     random_seed = 0
     render = False
-    
-
 
     """
      Actions (both primitive and subgoal) are implemented as follows:
@@ -815,12 +749,10 @@ def train():
     goal_dim = 1  # goal is single dimension and the 3rd element of state array
     goal_index = 2
 
-
-
     # primitive action, goal, and state bounds and offset
     action_offset_np = action_space.low[0]
     action_bounds_np = action_space.high - action_space.low
-    #goal_offset_np = np.array([0])
+    # goal_offset_np = np.array([0])
     action_offset = torch.FloatTensor(action_offset_np.reshape(1, -1)).to(device)
     action_bounds = torch.FloatTensor(action_bounds_np.reshape(1, -1)).to(device)
 
@@ -833,12 +765,12 @@ def train():
     state_offset = torch.FloatTensor(state_offset_np.reshape(1, -1)).to(device)
     state_bounds = torch.FloatTensor(state_bounds_np.reshape(1, -1)).to(device)
     state_clip_low = np.array(observation_space.low)
-    state_clip_high =  np.array(observation_space.high)
-    #max_goal = observation_space.high[2]
+    state_clip_high = np.array(observation_space.high)
+    # max_goal = observation_space.high[2]
     max_goal = np.array([10])
     # goal offset
-    #goal_offset_np = np.array([0])
-    #goal_offset = torch.FloatTensor(goal_offset_np.reshape(1, -1)).to(device)
+    # goal_offset_np = np.array([0])
+    # goal_offset = torch.FloatTensor(goal_offset_np.reshape(1, -1)).to(device)
     # exploration noise std for primitive action and subgoals
     exploration_action_noise = np.array([1])
     exploration_state_noise = np.array([1])
@@ -847,29 +779,26 @@ def train():
     action_policy_clip = np.array([0.5])
     state_policy_clip = np.array([0.5])
 
+    goal = np.array([0.143])  # final goal state to be achived
+    threshold = np.array([0.001])  # threshold value to check if goal state is achieved
 
-
-
-    goal = np.array([0.143])       # final goal state to be achived
-    threshold = np.array([0.001])       # threshold value to check if goal state is achieved
-    
     # HAC parameters:
-    k_level = 2                 # num of levels in hierarchy
-    c = 10                      # time horizon to achieve subgoal
-    lamda = 0.3                 # subgoal testing parameter
-    
+    k_level = 2  # num of levels in hierarchy
+    c = 10  # time horizon to achieve subgoal
+    lamda = 0.3  # subgoal testing parameter
+
     # DDPG parameters:
-    gamma = 0.95                # discount factor for future rewards
-    #n_iter = 100                # update policy n_iter times in one DDPG update
+    gamma = 0.95  # discount factor for future rewards
+    # n_iter = 100                # update policy n_iter times in one DDPG update
     # changing the n_iter from 100 to 6
     n_iter = 6
-    #batch_size = 100            # num of transitions sampled from replay buffer
+    # batch_size = 100            # num of transitions sampled from replay buffer
     # changing batch size from 100 to 5
     batch_size = 5
     lr = 0.001
-    policy_freq = 2 # policy frequency to update TD3
+    policy_freq = 2  # policy frequency to update TD3
     tau = 0.005
-    
+
     # save trained models
     directory = "./preTrained/{}/{}level/".format(env_name, k_level)
     directory_HIRO = "./HIRO/Reward_Plots/"
@@ -877,24 +806,21 @@ def train():
     filename = "HAC_{}".format(env_name)
     #########################################################
 
-
-
-
     # creating HAC agent and setting parameters
-    #seed = 50
-    #torch.manual_seed(seed)
+    # seed = 50
+    # torch.manual_seed(seed)
 
     agent = HAC(k_level, policy_freq, tau, c, state_dim, action_dim, goal_dim, goal_index, goal, render, threshold,
-                action_offset, state_offset, action_bounds, state_bounds, max_goal,action_policy_noise, state_policy_noise, action_policy_clip, state_policy_clip, lr)
+                action_offset, state_offset, action_bounds, state_bounds, max_goal, action_policy_noise,
+                state_policy_noise, action_policy_clip, state_policy_clip, lr)
     agent.set_parameters(lamda, gamma, n_iter, batch_size, action_clip_low, action_clip_high,
                          state_clip_low, state_clip_high, exploration_action_noise, exploration_state_noise)
 
-    
     # logging file:
-    log_f = open("log.txt","w+")
-    
+    log_f = open("log.txt", "w+")
+
     # training procedure
-    #agent.success_rate = np.zeros(max_episodes)
+    # agent.success_rate = np.zeros(max_episodes)
     agent.episode_rewards = []
     agent.rmse = []
     agent.IAE = []
@@ -903,17 +829,13 @@ def train():
     agent.average_iae = []
 
     agent.CSTR = []
-    #success = np.zeros(max_episodes)
-    #successful = 0
-
-
+    # success = np.zeros(max_episodes)
+    # successful = 0
 
     # set is a train case
     Test = False
 
-
-
-    for i_episode in range(1, max_episodes+1):
+    for i_episode in range(1, max_episodes + 1):
         agent.reward = 0
         agent.lo = 0  # rmse
         agent.iae = 0
@@ -924,22 +846,22 @@ def train():
         agent.propylene_glycol = []
         agent.flowrate = []
 
-        #agent.success = []
+        # agent.success = []
         agent.timestep = 0
         tot_time = 4
-        state = np.asarray([0, 3.45, 0, 0, np.random.normal(75,0.02*75)])      # initial state
+        state = np.asarray([0, 3.45, 0, 0, np.random.normal(75, 0.02 * 75)])  # initial state
         # collecting experience in environment
-        last_state = agent.run_HAC(CSTR, k_level-1, state, tot_time, Test)
-        #print("last sate",last_state[3])
+        last_state = agent.run_HAC(CSTR, k_level - 1, state, tot_time, Test)
+        # print("last sate",last_state[3])
         if agent.check_goal(last_state, goal, threshold):
             print("################ Solved! ################ ")
-            #successful = successful + 1
+            # successful = successful + 1
             name = filename + '_solved'
             agent.save(directory, name)
-        
+
         # update all levels
-        #print("lo",agent.lo)
-        #agent.update(n_iter, batch_size)
+        # print("lo",agent.lo)
+        # agent.update(n_iter, batch_size)
         agent.episode_rewards.append(agent.reward)
         agent.rmse.append(math.sqrt(agent.lo / 40))
         agent.IAE.append(agent.iae)
@@ -952,18 +874,17 @@ def train():
         # logging updates:
         log_f.write('{},{}\n'.format(i_episode, agent.reward))
         log_f.flush()
-        #print("Last State",last_state[3])
+        # print("Last State",last_state[3])
         if i_episode % save_episode == 0:
             agent.save(directory, filename)
-        
+
         print("Episode: {}\t Reward: {}".format(i_episode, agent.reward))
         print("state: ", last_state[2])
 
         name = directory_HIRO_plot_G + str(i_episode)
         plot_G(agent.propylene_glycol, tot_time, agent.flowrate, name)
 
-
-
+    np.savetxt("CSTR_HIRO.csv", agent.CSTR, delimiter=",")
 
     font1 = {'family': 'serif', 'size': 15}
     font2 = {'family': 'serif', 'size': 15}
@@ -972,62 +893,56 @@ def train():
     plt.plot(agent.episode_rewards)
     plt.xlabel("Number of episodes", fontdict=font2)
     plt.ylabel("Rewards", fontdict=font2)
-    plt.savefig(directory_HIRO+'Reward_Per_Episode_HIRO.png', bbox_inches = 'tight')
+    plt.savefig(directory_HIRO + 'Reward_Per_Episode_HIRO.png', bbox_inches='tight')
     plt.close()
-    #plt.show()
+    # plt.show()
 
     plt.figure()
     plt.plot(agent.average_reward)
     plt.xlabel("Number of episodes", fontdict=font1)
     plt.ylabel("Average Rewards", fontdict=font2)
-    plt.savefig(directory_HIRO+'Average_Rewarde_HIRO.png', bbox_inches = 'tight')
+    plt.savefig(directory_HIRO + 'Average_Rewarde_HIRO.png', bbox_inches='tight')
     plt.close()
-
 
     plt.figure()
     plt.plot(agent.average_rmse)
     plt.xlabel("Number of episodes", fontdict=font2)
     plt.ylabel("Average RMSE", fontdict=font2)
-    plt.savefig(directory_HIRO+'RMSE_HIRO.png', bbox_inches = 'tight')
+    plt.savefig(directory_HIRO + 'RMSE_HIRO.png', bbox_inches='tight')
     plt.close()
-
 
     plt.figure()
     plt.plot(agent.average_iae)
     plt.xlabel("Number of episodes", fontdict=font2)
     plt.ylabel("Average IAE", fontdict=font2)
-    plt.savefig(directory_HIRO+'IAE_HIRO.png', bbox_inches = 'tight')
+    plt.savefig(directory_HIRO + 'IAE_HIRO.png', bbox_inches='tight')
     plt.close()
 
-    np.savetxt("CSTR_HIRO.csv", agent.CSTR, delimiter=",")
+
 
     # Generate some sample data (you'll replace this with your actual data)
-    #num_episodes = 1000
-    #rewards = np.random.normal(loc=0, scale=1, size=num_episodes)  # Sample rewards
-    #print(rewards.shape)
-    #window_size = 20  # Size of the rolling window for calculating moving average
+    # num_episodes = 1000
+    # rewards = np.random.normal(loc=0, scale=1, size=num_episodes)  # Sample rewards
+    # print(rewards.shape)
+    # window_size = 20  # Size of the rolling window for calculating moving average
 
     # Calculate average reward and variance using a rolling window
-    #avg_rewards = np.convolve(agent.rewards, np.ones(window_size) / window_size, mode='valid')
-    #var_rewards = np.convolve((agent.rewards - avg_rewards.mean()) ** 2, np.ones(window_size) / window_size, mode='valid')
+    # avg_rewards = np.convolve(agent.rewards, np.ones(window_size) / window_size, mode='valid')
+    # var_rewards = np.convolve((agent.rewards - avg_rewards.mean()) ** 2, np.ones(window_size) / window_size, mode='valid')
 
     # Plotting
-    #plt.figure(figsize=(10, 6))
-    #plt.plot(range(len(avg_rewards)), avg_rewards, label='Average Reward', color='blue')
-    #plt.fill_between(range(len(var_rewards)), avg_rewards - np.sqrt(var_rewards), avg_rewards + np.sqrt(var_rewards),
+    # plt.figure(figsize=(10, 6))
+    # plt.plot(range(len(avg_rewards)), avg_rewards, label='Average Reward', color='blue')
+    # plt.fill_between(range(len(var_rewards)), avg_rewards - np.sqrt(var_rewards), avg_rewards + np.sqrt(var_rewards),
     #                 color='blue', alpha=0.2, label='Variance')
-    #plt.title('Average Reward and Variance over Training Episodes')
-    #plt.xlabel('Training Episodes')
-    #plt.ylabel('Reward')
-    #plt.legend()
-    #plt.grid(True)
-    #plt.show()
-
-
-
-
+    # plt.title('Average Reward and Variance over Training Episodes')
+    # plt.xlabel('Training Episodes')
+    # plt.ylabel('Reward')
+    # plt.legend()
+    # plt.grid(True)
+    # plt.show()
 
 
 if __name__ == '__main__':
     train()
- 
+

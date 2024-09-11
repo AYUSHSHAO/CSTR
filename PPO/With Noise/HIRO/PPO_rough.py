@@ -84,9 +84,10 @@ class Critic_High(nn.Module):
 
 
 class DDPG_Low:
-    def __init__(self, state_dim, action_dim, goal_dim, action_bounds, action_offset, policy_freq, tau, lr):
+    def __init__(self, state_dim, action_dim, goal_dim, action_bounds, action_offset, policy_freq, tau, gamma, lr):
 
         ################### For Lower Level Policy############################
+        self.gamma = gamma
         self.tau = tau
         self.policy_freq = policy_freq
         self.goal_dim = goal_dim # as goal is the state which our agent should acheive
@@ -100,13 +101,12 @@ class DDPG_Low:
 
         self.mseLoss = torch.nn.MSELoss()
 
-    def compute_rtgs(self, batch_rews):
+    def compute_rtgs(self, ep_rews, gamma):
         batch_rtgs = []
-        for ep_rews in reversed(batch_rews):
-            discounted_reward = 0
-            for rew in reversed(ep_rews):
-                discounted_reward = rew + discounted_reward * gamma
-                batch_rtgs.insert(0, discounted_reward)
+        discounted_reward = 0
+        for rew in reversed(ep_rews):
+            discounted_reward = rew + discounted_reward * gamma
+            batch_rtgs.insert(0, discounted_reward)
         batch_rtgs = torch.tensor(batch_rtgs, dtype=torch.float)
 
         return batch_rtgs
@@ -124,12 +124,16 @@ class DDPG_Low:
         state = torch.FloatTensor(state.reshape(1, -1)).to(device)
         goal = torch.FloatTensor(goal.reshape(1, -1)).to(device)
 
-        return self.actor_Low(state, goal).detach().cpu().data.numpy().flatten()
+        return abs(self.actor_Low(state, goal).sample().detach().cpu().data.numpy().flatten())
 
-    def update_Low(self, ppo_epochs, batch_obs, batch_acts, batch_log_probs, A_k, batch_rtgs, clip):
-
+    def update_Low(self, ppo_epochs, batch_obs_state, batch_obs_goal, batch_acts, ep_rews, clip):
+        batch_log_probs = self.actor_Low(batch_obs_state, batch_obs_goal).log_prob(batch_acts)
+        batch_rtgs = self.compute_rtgs(ep_rews, self.gamma)
+        V, _ = self.Evaluate(batch_obs_state, batch_obs_goal, batch_acts)
+        A_k = batch_rtgs - torch.squeeze(V.T, 0).detach()
+        A_k = (A_k - A_k.mean()) / (A_k.std() + 1e-10)
         for i in range(ppo_epochs):
-            V, curr_log_probs = self.Evaluate(batch_obs, batch_acts)
+            V, curr_log_probs = self.Evaluate(batch_obs_state, batch_obs_goal, batch_acts)
             ratios = torch.exp(curr_log_probs - batch_log_probs)
             surr1 = ratios * A_k
             surr2 = torch.clamp(ratios, 1.0 - clip, 1.0 + clip) * A_k
@@ -145,12 +149,9 @@ class DDPG_Low:
 
 
 
-
-
     def save(self, directory, name):
         torch.save(self.actor_Low.state_dict(), '%s/%s_actor_Low.pth' % (directory, name))
         torch.save(self.critic_Low.state_dict(), '%s/%s_critic_Low.pth' % (directory, name))
-
 
 
     def load(self, directory, name):
@@ -261,17 +262,6 @@ class DDPG_High:
 
         ############################################################
 
-
-
-
-
-lr = 0.003
-ppo_epochs = 10
-
-
-
-
-gamma = 0.99
 
 
 from matplotlib.cbook import safe_first_element
