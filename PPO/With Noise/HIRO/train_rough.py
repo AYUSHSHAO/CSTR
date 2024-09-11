@@ -460,18 +460,19 @@ class DDPG_High:
 
 class HAC:
     def __init__(self, k_level, policy_freq, tau, c, state_dim, action_dim, goal_dim, goal_index, goal, render,
-                 threshold, action_offset, state_offset, action_bounds, state_bounds, max_goal,
-                 action_policy_noise, state_policy_noise, action_policy_clip, state_policy_clip, lr):
+                 threshold,
+                 action_offset, state_offset, action_bounds, state_bounds, max_goal, lr):
 
         # adding the lowest level
-        self.HAC = [DDPG_Low(state_dim, action_dim, goal_dim, action_bounds, action_offset, policy_freq, tau,
-                             action_policy_noise, action_policy_clip, lr)]
+
+
+        self.HAC = [DDPG_Low(state_dim, action_dim, goal_dim, action_bounds, action_offset, policy_freq, tau, lr)]
         self.replay_buffer = [ReplayBuffer_Low()]
 
         # adding remaining levels
         for _ in range(k_level - 1):
-            self.HAC.append(DDPG_High(state_dim, goal_dim, goal_index, state_bounds, state_offset, policy_freq, tau,
-                                      state_policy_noise, state_policy_clip, lr))
+            self.HAC.append(
+                DDPG_High(state_dim, goal_dim, goal_index, state_bounds, state_offset, policy_freq, tau, lr))
             self.replay_buffer.append(ReplayBuffer_High())
 
         # set some parameters
@@ -490,6 +491,10 @@ class HAC:
 
         # logging parameters
         self.goals = [None] * self.k_level
+        self.batch_obs_state = []
+        self.batch_obs_goal = []
+        self.batch_acts = []
+        self.ep_rews = []
         self.reward = 0
         self.lo = 0
         self.iae = 0
@@ -577,6 +582,16 @@ class HAC:
             return False
         return True
 
+    def norm_action(self, action):
+        low = -1
+        high = 1
+
+        action = ((action - low) / (high - low))
+
+        action = 78 + action
+
+        return action
+
     def run_HAC(self, env, i_level, state, tot_time, test):
 
         time = 0.01
@@ -584,7 +599,7 @@ class HAC:
 
         # show_goal_achieve = True
         final_goal = self.goal
-        next_obs_noise = None
+        next_state = None
         max_goal = torch.from_numpy(np.array(self.max_goal))
 
         steps = 0  # number of steps taken by agent
@@ -602,22 +617,23 @@ class HAC:
         while time < tot_time:
             steps = steps + 1
             action = self.HAC[i_level - 1].select_action_Low(state, goal)  # action taken by lower level policy
-
             # action = norm_action(action)
-
-            action = action + np.random.normal(1, self.exploration_action_noise)
+            self.batch_obs_state.append(torch.from_numpy(state))
+            self.batch_acts.append(torch.from_numpy(action))
+            action = action + np.random.normal(0, self.exploration_action_noise)
             action = action.clip(self.action_clip_low, self.action_clip_high)
             # action = np.array([0.000000000000000000001])
 
             # 2.2.2 interact environment
             # print("state", state)
             next_state, reward = env(action, time, state)
-
             next_state = np.array([next_state])
+
+            self.ep_rews.append(reward)
+            print("state type", type(next_state))
             next_state_noise_2 = np.random.normal(next_state[:, 2], 0.01 * next_state[:, 2])
             next_state_noise = np.concatenate((next_state[:, :2], np.array([next_state_noise_2]), next_state[:, 3:]), 1)
             next_obs_noise = next_state_noise[0]
-
             self.lo += (np.abs(next_state_noise_2 - final_goal) ** 2)
             self.iae += (np.abs(next_state_noise_2 - final_goal))
 
@@ -631,13 +647,14 @@ class HAC:
             intri_reward = self.intrinsic_reward(state, goal, next_obs_noise)
             self.reward += reward
             next_goal = self.h_function(next_obs_noise, state, goal, self.goal_index)
+            self.batch_obs_goal.append(torch.from_numpy(next_goal))
+            print("next goal type from h function", type(next_goal))
             # next_goal = next_goal.clip(self.state_clip_low[self.goal_index], self.state_clip_high[self.goal_index])
 
             # print("next goal shape",next_goal.shape)
             # print("goal", next_goal)
             # 2.2.4 collect low-level experience
-            self.replay_buffer[i_level - 1].add(
-                (state, action, goal, intri_reward, next_obs_noise, next_goal, self.gamma))
+            self.replay_buffer[i_level - 1].add((state, action, goal, intri_reward, next_obs_noise, next_goal, self.gamma))
 
             state_sequence.append(torch.from_numpy(state))
             action_sequence.append(torch.from_numpy(action))
@@ -656,21 +673,20 @@ class HAC:
             if (steps + 1) % self.c == 0 and steps > 0:
 
                 next_goal = self.HAC[i_level].select_action_High(state)
+                print("next goal type from higher policy", type(next_goal))
                 next_goal = next_goal + np.random.normal(0, self.exploration_state_noise)
                 next_goal = next_goal.clip(self.state_clip_low[self.goal_index], self.state_clip_high[self.goal_index])
 
-                actor_target_l = copy.deepcopy(self.HAC[i_level - 1].actor_Low)
+                # actor_target_l =  copy.deepcopy(self.HAC[i_level - 1].actor_Low)
 
                 # off-policy correction
-                goal_hat, updated = self.off_policy_correction(actor_target_l, action_sequence, state_sequence,
-                                                               self.goal_dim, self.goal_index, goal_sequence[0],
-                                                               next_obs_noise, max_goal, device)
+                # goal_hat, updated = self.off_policy_correction(actor_target_l, action_sequence, state_sequence, self.goal_dim, self.goal_index, goal_sequence[0], next_state, max_goal, device)
                 # print(goal_hat)
 
                 # self.replay_buffer[i_level].add(state, goal_hat, episode_reward_h, next_state, done_h)
                 # print("next goal", next_goal)
                 # print("goal hat", goal_hat)
-                self.replay_buffer[i_level].add((state_sequence[0], goal_hat, episode_reward_h, next_obs_noise,
+                self.replay_buffer[i_level].add((state_sequence[0], next_goal, episode_reward_h, next_state,
                                                  self.gamma))  # implement goal hat instead of next_goal
                 state_sequence, action_sequence, intri_reward_sequence, goal_sequence, reward_h_sequence = [], [], [], [], []
                 episode_reward_h = 0
@@ -681,12 +697,12 @@ class HAC:
                 # 2.2.9 reset segment arguments & log (reward)
 
             # 2.2.10 update observations
-            state = next_obs_noise
+            state = next_state
             goal = next_goal
 
             time = time + dt
 
-            goal_achieved = self.check_goal(next_obs_noise, final_goal, self.threshold)
+            goal_achieved = self.check_goal(next_state, final_goal, self.threshold)
             # if goal_achieved and Train == True:
             # print("goal achieved in steps",t)
             # show_goal_achieve = False
@@ -694,7 +710,12 @@ class HAC:
             if goal_achieved and test == True:
                 self.solved = True
 
-        return next_obs_noise
+        self.batch_obs_state = torch.tensor(self.batch_obs_state, dtype=torch.float)
+        self.batch_obs_goal = torch.tensor(self.batch_obs_goal, dtype=torch.float)
+        self.batch_acts = torch.tensor(self.batch_acts, dtype=torch.float)
+
+
+        return next_state
 
     def update(self, k_level, n_iter, batch_size):
         # def update(self, n_iter, batch_size):
