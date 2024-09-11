@@ -92,17 +92,30 @@ class DDPG_Low:
         self.goal_dim = goal_dim # as goal is the state which our agent should acheive
         self.actor_Low = Actor_Low(state_dim, action_dim, self.goal_dim, action_bounds, action_offset).to(device)
         self.actor_Low_target = Actor_Low(state_dim, action_dim, self.goal_dim, action_bounds, action_offset).to(device)
-        self.actor_optimizer = optim.Adam(self.actor_Low.parameters(), lr=lr)
+        self.actor_Low_optimizer = optim.Adam(self.actor_Low.parameters(), lr=lr)
         # two critics for TD3 learning
-        self.critic_Low_1 = Critic_Low(state_dim, action_dim, self.goal_dim).to(device)
-        self.critic_Low_target_1 = Critic_Low(state_dim, action_dim, self.goal_dim).to(device)
-        self.critic_Low_1_optimizer = optim.Adam(self.critic_Low_1.parameters(), lr=lr)
-
-        self.critic_Low_2 = Critic_Low(state_dim, action_dim, self.goal_dim).to(device)
-        self.critic_Low_target_2 = Critic_Low(state_dim, action_dim, self.goal_dim).to(device)
-        self.critic_Low_2_optimizer = optim.Adam(self.critic_Low_2.parameters(), lr=lr)
+        self.critic_Low = Critic_Low(state_dim).to(device)
+        self.critic_Low_target = Critic_Low(state_dim).to(device)
+        self.critic_Low_optimizer = optim.Adam(self.critic_Low.parameters(), lr=lr)
 
         self.mseLoss = torch.nn.MSELoss()
+
+    def compute_rtgs(self, batch_rews):
+        batch_rtgs = []
+        for ep_rews in reversed(batch_rews):
+            discounted_reward = 0
+            for rew in reversed(ep_rews):
+                discounted_reward = rew + discounted_reward * gamma
+                batch_rtgs.insert(0, discounted_reward)
+        batch_rtgs = torch.tensor(batch_rtgs, dtype=torch.float)
+
+        return batch_rtgs
+
+    def Evaluate(self, batch_obs_state,batch_obs_goal, batch_acts):
+        dist = self.actor_Low(batch_obs_state,batch_obs_goal)
+        V = self.critic_Low(batch_obs_state)
+        log_probs = dist.log_prob(torch.unsqueeze(batch_acts, 1))
+        return V, log_probs.squeeze()
 
 
 
@@ -113,94 +126,37 @@ class DDPG_Low:
 
         return self.actor_Low(state, goal).detach().cpu().data.numpy().flatten()
 
-    def update_Low(self, ppo_epochs, batch_obs, batch_log_probs, A_k, batch_rtgs, clip):
+    def update_Low(self, ppo_epochs, batch_obs, batch_acts, batch_log_probs, A_k, batch_rtgs, clip):
+
         for i in range(ppo_epochs):
-            V, curr_log_probs = Evaluate(batch_obs)
+            V, curr_log_probs = self.Evaluate(batch_obs, batch_acts)
             ratios = torch.exp(curr_log_probs - batch_log_probs)
             surr1 = ratios * A_k
             surr2 = torch.clamp(ratios, 1.0 - clip, 1.0 + clip) * A_k
             actor_loss = - (torch.min(surr1, surr2).mean())
             # critic_loss = nn.MSELoss()(V, batch_rtgs)
             critic_loss = (batch_rtgs - torch.squeeze(V.T, 0)).pow(2).mean()
-            actor_optim.zero_grad()
+            self.actor_Low_optimizer.zero_grad()
             actor_loss.backward(retain_graph=True)
-            actor_optim.step()
-            critic_optim.zero_grad()
+            self.actor_Low_optimizer.step()
+            self.critic_Low_optimizer.zero_grad()
             critic_loss.backward()
-            critic_optim.step()
+            self.critic_Low_optimizer.step()
 
-    def update_Low(self, buffer, n_iter, batch_size):
-        for i in range(n_iter):
-            # Sample a batch of transitions from replay buffer:
-            state, action, goal, reward, next_state, next_goal, gamma = buffer.sample(batch_size)
-
-            # convert np arrays into tensors
-            state = torch.FloatTensor(state).to(device)
-            action = torch.FloatTensor(action).to(device)
-            next_goal = torch.FloatTensor(next_goal).to(device)
-            reward = torch.FloatTensor(reward).reshape((batch_size, 1)).to(device)
-            next_state = torch.FloatTensor(next_state).to(device)
-            goal = torch.FloatTensor(goal).to(device)
-            gamma = torch.FloatTensor(gamma).reshape((batch_size, 1)).to(device)
-
-            # select next action
-            next_action = self.actor_Low_target(next_state, next_goal).detach()
-
-            # take the minimum of 2 q-values ---> TD3
-            target_Q1 = self.critic_Low_target_1(next_state, next_action, next_goal).detach()
-            target_Q2 = self.critic_Low_target_2(next_state, next_action, next_goal).detach()
-            target_Q = torch.min(target_Q1, target_Q2)
-            # Compute target Q-value:
-            target_Q = reward + gamma * target_Q
-
-            current_Q1 = self.critic_Low_1(state, action, goal)
-            current_Q2 = self.critic_Low_2(state, action, goal)
-
-            # Optimize Critic:
-            critic_loss1 = self.mseLoss(current_Q1, target_Q)
-            self.critic_Low_1_optimizer.zero_grad()
-            critic_loss1.backward()
-            self.critic_Low_1_optimizer.step()
-
-            critic_loss2 = self.mseLoss(current_Q2, target_Q)
-            self.critic_Low_2_optimizer.zero_grad()
-            critic_loss2.backward()
-            self.critic_Low_2_optimizer.step()
-
-
-
-            if i % self.policy_freq == 0:
-
-                # Compute actor loss:
-                actor_loss = -self.critic_Low_1(state, self.actor_Low(state, goal), goal).mean()
-
-                # Optimize the actor
-                self.actor_optimizer.zero_grad()
-                actor_loss.backward()
-                self.actor_optimizer.step()
-
-                for param, target_param in zip(self.actor_Low.parameters(), self.actor_Low_target.parameters()):
-                    target_param.data.copy_(self.tau * param.data + (1 - self.tau) * target_param.data)
-
-                for param, target_param in zip(self.critic_Low_1.parameters(), self.critic_Low_target_1.parameters()):
-                    target_param.data.copy_(self.tau * param.data + (1 - self.tau) * target_param.data)
-
-                for param, target_param in zip(self.critic_Low_2.parameters(), self.critic_Low_target_2.parameters()):
-                    target_param.data.copy_(self.tau * param.data + (1 - self.tau) * target_param.data)
 
 
 
 
     def save(self, directory, name):
         torch.save(self.actor_Low.state_dict(), '%s/%s_actor_Low.pth' % (directory, name))
-        torch.save(self.critic_Low_1.state_dict(), '%s/%s_critic_Low_1.pth' % (directory, name))
-        torch.save(self.critic_Low_2.state_dict(), '%s/%s_critic_Low_2.pth' % (directory, name))
+        torch.save(self.critic_Low.state_dict(), '%s/%s_critic_Low.pth' % (directory, name))
+
 
 
     def load(self, directory, name):
         self.actor_Low.load_state_dict(torch.load('%s/%s_actor_Low.pth' % (directory, name), map_location='cpu'))
-        self.critic_Low_1.load_state_dict(torch.load('%s/%s_critic_Low_1.pth' % (directory, name), map_location='cpu'))
-        self.critic_Low_2.load_state_dict(torch.load('%s/%s_critic_Low_2.pth' % (directory, name), map_location='cpu'))
+        self.critic_Low.load_state_dict(torch.load('%s/%s_critic_Low.pth' % (directory, name), map_location='cpu'))
+
 
 
 
@@ -307,60 +263,18 @@ class DDPG_High:
 
 
 
-class CriticNet(nn.Module):
-    def __init__(self):
-        super(CriticNet, self).__init__()
-        self.fc = nn.Linear(5, 10)
-        self.v_head = nn.Linear(10, 1)
 
-    def forward(self, x):
-        x = F.relu(self.fc(x))
-        state_value = self.v_head(x)
-        return state_value
 
 lr = 0.003
 ppo_epochs = 10
 
-model1 = ActorNet()
-model2 = CriticNet()
-actor_optim = optim.Adam(model1.parameters(), lr=lr)
-critic_optim = optim.Adam(model2.parameters(), lr=lr)
+
+
 
 gamma = 0.99
 
-def compute_rtgs(batch_rews):
-    batch_rtgs = []
-    for ep_rews in reversed(batch_rews):
-        discounted_reward = 0
-        for rew in reversed(ep_rews):
-            discounted_reward = rew + discounted_reward * gamma
-            batch_rtgs.insert(0, discounted_reward)
-    batch_rtgs = torch.tensor(batch_rtgs, dtype=torch.float)
-
-    return batch_rtgs
-
-def Evaluate(batch_obs, batch_act):
-    dist = model1(batch_obs)
-    V = model2(batch_obs)
-    log_probs = dist.log_prob(torch.unsqueeze(batch_acts, 1))
-    return V, log_probs.squeeze()
 
 from matplotlib.cbook import safe_first_element
-def PPO(ppo_epochs, batch_obs, batch_acts, batch_log_probs, A_k, batch_rtgs):
-    for i in range(ppo_epochs):
-        V, curr_log_probs = Evaluate(batch_obs, batch_acts)
-        ratios = torch.exp(curr_log_probs - batch_log_probs)
-        surr1 = ratios * A_k
-        surr2 = torch.clamp(ratios, 1.0 - clip, 1.0 + clip) * A_k
-        actor_loss = - (torch.min(surr1, surr2).mean())
-        # critic_loss = nn.MSELoss()(V, batch_rtgs)
-        critic_loss = (batch_rtgs - torch.squeeze(V.T, 0)).pow(2).mean()
-        actor_optim.zero_grad()
-        actor_loss.backward(retain_graph=True)
-        LOSS.append(actor_loss.detach().numpy())
-        actor_optim.step()
-        critic_optim.zero_grad()
-        critic_loss.backward()
-        critic_optim.step()
+
 # plt.plot(LOSS)
 # plt.show()
