@@ -819,7 +819,7 @@ def train():
     lamda = 0.3  # subgoal testing parameter
 
     # DDPG parameters:
-    gamma = 0.93  # discount factor for future rewards
+    gamma = 0.91  # discount factor for future rewards
     # n_iter = 100                # update policy n_iter times in one DDPG update
     # changing the n_iter from 100 to 6
     n_iter = 10
@@ -827,7 +827,7 @@ def train():
     # batch_size = 100            # num of transitions sampled from replay buffer
     # changing batch size from 100 to 5
     batch_size = 5
-    lr = 0.004
+    lr = 0.003
     policy_freq = 2  # policy frequency to update TD3
     tau = 0.005
 
