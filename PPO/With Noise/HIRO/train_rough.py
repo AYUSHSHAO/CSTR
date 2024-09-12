@@ -827,7 +827,7 @@ def train():
     # batch_size = 100            # num of transitions sampled from replay buffer
     # changing batch size from 100 to 5
     batch_size = 5
-    lr = 0.001
+    lr = 0.003
     policy_freq = 2  # policy frequency to update TD3
     tau = 0.005
 
