@@ -89,8 +89,9 @@ class ActorNet(nn.Module):
         self.sigma_head = nn.Linear(10, 1)
 
     def forward(self, x):
+        print("x data type", x.dtype)
         x1 = torch.sigmoid(self.fc1(x))
-        mu = 160 * (abs(self.mu_head(x1)))
+        mu = 40 * (abs(self.mu_head(x1)))
         #         sigma = (torch.exp((torch.tanh(self.sigma_head(x1)))))
         #         mu = 80*(abs(self.mu_head(x2)))
         #         # sigma = torch.exp((F.tanh(self.sigma_head(x1))))
@@ -175,7 +176,7 @@ def PPO(ppo_epochs, batch_obs, batch_acts, batch_log_probs, A_k, batch_rtgs):
         ratios = torch.exp(curr_log_probs - batch_log_probs)
         surr1 = ratios * A_k
         surr2 = torch.clamp(ratios, 1.0 - clip, 1.0 + clip) * A_k
-        actor_loss = - (torch.min(surr1, surr2).mean())
+        actor_loss = -(torch.min(surr1, surr2).mean())
         #critic_loss = nn.MSELoss()(V, batch_rtgs)
         critic_loss = (batch_rtgs-torch.squeeze(V.T,0)).pow(2).mean()
         actor_optim.zero_grad()
@@ -252,6 +253,7 @@ while t_so_far < total_timesteps:
         T = 4
         plot_G(propylene_glycol, flowrate)
     batch_obs = torch.tensor(batch_obs, dtype=torch.float)
+
     batch_acts = torch.tensor(batch_acts, dtype=torch.float)
     batch_log_probs = torch.tensor(batch_log_probs, dtype=torch.float)
     #print(batch_rews)

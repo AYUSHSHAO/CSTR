@@ -6,6 +6,8 @@ import numpy as np
 from scipy.integrate import odeint
 #from HAC import HAC
 import matplotlib.pyplot as plt
+
+
 from transesterification import get_state
 #from CSTR import CSTR
 import random
@@ -281,7 +283,8 @@ class Critic_High(nn.Module):
         )
 
     def forward(self, state, goal):
-
+        print("state shape", state.shape)
+        print("goal shape", goal.shape)
         return self.critic(torch.cat([state, goal], 1))
 
 
@@ -640,7 +643,14 @@ class HAC:
             return False
         return True
 
+    def norm_action(self, action):
+        low = -1
+        high = 1
+        action = ((action - low) / (high - low))
 
+        action = 78 + action
+
+        return action
 
     def run_HAC(self, env, i_level, state, tot_time, test):
 
@@ -667,8 +677,7 @@ class HAC:
         while time < tot_time:
             steps = steps + 1
             action = self.HAC[i_level - 1].select_action_Low(state, goal)  # action taken by lower level policy
-
-            # action = norm_action(action)
+            action = self.norm_action(action)
 
             action = action + np.random.normal(1, self.exploration_action_noise)
             action = action.clip(self.action_clip_low, self.action_clip_high)

@@ -4,7 +4,7 @@ from gym import spaces
 import math
 import numpy as np
 from scipy.integrate import odeint
-
+torch.autograd.set_detect_anomaly(True)
 # from HAC import HAC
 import matplotlib.pyplot as plt
 from transesterification import get_state
@@ -12,7 +12,7 @@ from transesterification import get_state
 import random
 import torch.nn as nn
 import torch.optim as optim
-from torch import Tensor
+from torch import Tensor, dtype
 from torch.nn import functional
 import torch.nn.functional as F
 from torch.distributions import Normal
@@ -211,8 +211,10 @@ class Actor_Low(nn.Module):
 
     def forward(self, state, goal):
         x = torch.cat([state, goal], 1)
+
+
         x1 = torch.sigmoid(self.fc1(x))
-        mu = 160 * (abs(self.mu_head(x1)))
+        mu = 320 * (abs(self.mu_head(x1)))
         #         sigma = (torch.exp((torch.tanh(self.sigma_head(x1)))))
         #         mu = 80*(abs(self.mu_head(x2)))
         #         # sigma = torch.exp((F.tanh(self.sigma_head(x1))))
@@ -268,8 +270,6 @@ class Critic_High(nn.Module):
         )
 
     def forward(self, state, goal):
-        print("state shape",state.shape)
-        print("goal shape", goal.shape)
        # print("shape of cat",torch.cat([state, goal]).shape)
         return self.critic(torch.cat([state, goal], 1))
 
@@ -318,7 +318,8 @@ class DDPG_Low:
         return abs(self.actor_Low(state, goal).sample().detach().cpu().data.numpy().flatten())
 
     def update_Low(self, ppo_epochs, batch_obs_state, batch_obs_goal, batch_acts, ep_rews):
-        batch_log_probs = self.actor_Low(batch_obs_state, batch_obs_goal).log_prob(batch_acts)
+
+        batch_log_probs = self.actor_Low(batch_obs_state, batch_obs_goal).log_prob(batch_acts).detach()
         batch_rtgs = self.compute_rtgs(ep_rews, self.gamma)
         V, _ = self.Evaluate(batch_obs_state, batch_obs_goal, batch_acts)
         A_k = batch_rtgs - torch.squeeze(V.T, 0).detach()
@@ -328,9 +329,10 @@ class DDPG_Low:
             ratios = torch.exp(curr_log_probs - batch_log_probs)
             surr1 = ratios * A_k
             surr2 = torch.clamp(ratios, 1.0 - self.clip_low, 1.0 + self.clip_low) * A_k
-            actor_loss = - (torch.min(surr1, surr2).mean())
+            actor_loss = -(torch.min(surr1, surr2).mean())
             # critic_loss = nn.MSELoss()(V, batch_rtgs)
             critic_loss = (batch_rtgs - torch.squeeze(V.T, 0)).pow(2).mean()
+
             self.actor_Low_optimizer.zero_grad()
             actor_loss.backward(retain_graph=True)
             self.actor_Low_optimizer.step()
@@ -690,7 +692,7 @@ class HAC:
                 # self.replay_buffer[i_level].add(state, goal_hat, episode_reward_h, next_state, done_h)
                 # print("next goal", next_goal)
                 # print("goal hat", goal_hat)
-                self.replay_buffer[i_level].add((state_sequence[0], next_goal, episode_reward_h, next_state,
+                self.replay_buffer[i_level].add((state_sequence[0], next_goal, episode_reward_h, next_obs_noise,
                                                  self.gamma))  # implement goal hat instead of next_goal
                 state_sequence, action_sequence, intri_reward_sequence, goal_sequence, reward_h_sequence = [], [], [], [], []
                 episode_reward_h = 0
@@ -714,15 +716,18 @@ class HAC:
             if goal_achieved and test == True:
                 self.solved = True
 
-        self.batch_obs_state = torch.tensor(self.batch_obs_state, dtype=torch.float)
-        self.batch_obs_goal = torch.tensor(self.batch_obs_goal, dtype=torch.float)
-        self.batch_acts = torch.tensor(self.batch_acts, dtype=torch.float)
+        self.batch_obs_state = torch.stack(self.batch_obs_state).to(torch.float32)
+        #print("batch_obs_state data type",self.batch_obs_state.dtype)
+        self.batch_obs_goal = torch.stack(self.batch_obs_goal).to(torch.float32)
+        #print("batch_obs_goal data type", self.batch_obs_goal.dtype)
+        self.batch_acts = torch.stack(self.batch_acts)
+       # print("batch_acts data type", self.batch_acts.dtype)
 
         # update the DDPG parameters
         self.HAC[i_level-1].update_Low(self.ppo_epochs, self.batch_obs_state, self.batch_obs_goal, self.batch_acts, self.ep_rews)
 
 
-        return next_state
+        return state
 
     def update(self, k_level, n_iter, batch_size):
         # def update(self, n_iter, batch_size):
@@ -802,8 +807,8 @@ def train():
     exploration_state_noise = np.array([1])
     action_policy_noise = np.array([0.2])
     state_policy_noise = np.array([0.2])
-    action_policy_clip = np.array([0.5])
     state_policy_clip = np.array([0.5])
+    clip_low = 0.2
 
     goal = np.array([0.143])  # final goal state to be achived
     threshold = np.array([0.001])  # threshold value to check if goal state is achieved
@@ -840,7 +845,7 @@ def train():
 
     agent = HAC(k_level, policy_freq, tau, c, state_dim, action_dim, goal_dim, goal_index, goal, render, threshold,
                 action_offset, state_offset, action_bounds, state_bounds, max_goal, action_policy_noise,
-                state_policy_noise, action_policy_clip, state_policy_clip, gamma, lr)
+                state_policy_noise, clip_low, state_policy_clip, gamma, lr)
     agent.set_parameters(lamda, ppo_epochs, n_iter, batch_size, action_clip_low, action_clip_high,
                          state_clip_low, state_clip_high, exploration_action_noise, exploration_state_noise)
 
