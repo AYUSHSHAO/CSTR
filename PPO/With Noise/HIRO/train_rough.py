@@ -214,11 +214,11 @@ class Actor_Low(nn.Module):
 
 
         x1 = torch.sigmoid(self.fc1(x))
-        mu = 320 * (abs(self.mu_head(x1)))
+        mu = 160 * (abs(self.mu_head(x1)))
         #         sigma = (torch.exp((torch.tanh(self.sigma_head(x1)))))
         #         mu = 80*(abs(self.mu_head(x2)))
         #         # sigma = torch.exp((F.tanh(self.sigma_head(x1))))
-        sigma = 2 * (abs(self.sigma_head(x1)))
+        sigma = (abs(self.sigma_head(x1)))
         return Normal(mu, sigma)
 
 
@@ -628,8 +628,7 @@ class HAC:
             # action = norm_action(action)
             self.batch_obs_state.append(torch.from_numpy(state))
             self.batch_acts.append(torch.from_numpy(action))
-            action = action + np.random.normal(0, self.exploration_action_noise)
-            action = action.clip(self.action_clip_low, self.action_clip_high)
+
             # action = np.array([0.000000000000000000001])
 
             # 2.2.2 interact environment
@@ -637,7 +636,7 @@ class HAC:
             next_state, reward = env(action, time, state)
             next_state = np.array([next_state])
 
-            self.ep_rews.append(reward)
+
 
             next_state_noise_2 = np.random.normal(next_state[:, 2], 0.01 * next_state[:, 2])
             next_state_noise = np.concatenate((next_state[:, :2], np.array([next_state_noise_2]), next_state[:, 3:]), 1)
@@ -653,6 +652,7 @@ class HAC:
             reward_h = reward
 
             intri_reward = self.intrinsic_reward(state, goal, next_obs_noise)
+            self.ep_rews.append(intri_reward)
             self.reward += reward
             next_goal = self.h_function(next_obs_noise, state, goal, self.goal_index)
             self.batch_obs_goal.append(torch.from_numpy(next_goal))
@@ -819,7 +819,7 @@ def train():
     lamda = 0.3  # subgoal testing parameter
 
     # DDPG parameters:
-    gamma = 0.95  # discount factor for future rewards
+    gamma = 0.99  # discount factor for future rewards
     # n_iter = 100                # update policy n_iter times in one DDPG update
     # changing the n_iter from 100 to 6
     n_iter = 10
@@ -827,7 +827,7 @@ def train():
     # batch_size = 100            # num of transitions sampled from replay buffer
     # changing batch size from 100 to 5
     batch_size = 5
-    lr = 0.003
+    lr = 0.004
     policy_freq = 2  # policy frequency to update TD3
     tau = 0.005
 
