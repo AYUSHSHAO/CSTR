@@ -89,9 +89,9 @@ class ActorNet(nn.Module):
         self.sigma_head = nn.Linear(10, 1)
 
     def forward(self, x):
-        print("x data type", x.dtype)
+
         x1 = torch.sigmoid(self.fc1(x))
-        mu = 40 * (abs(self.mu_head(x1)))
+        mu = 160 * (abs(self.mu_head(x1)))
         #         sigma = (torch.exp((torch.tanh(self.sigma_head(x1)))))
         #         mu = 80*(abs(self.mu_head(x2)))
         #         # sigma = torch.exp((F.tanh(self.sigma_head(x1))))
@@ -126,7 +126,7 @@ actor_optim = optim.Adam(model1.parameters(), lr=lr)
 critic_optim = optim.Adam(model2.parameters(), lr=lr)
 
 
-def plot_G(propylene_glycol, flowrate):
+def plot_G(propylene_glycol, flowrate, name):
     time = np.linspace(0, T, int(T / dt))
     T1 = 0.143
     ta = np.ones(80) * T1
@@ -144,8 +144,8 @@ def plot_G(propylene_glycol, flowrate):
     ax2.tick_params(axis='y', labelcolor=color)
     ax2.grid(color='y', linestyle='-', linewidth=1)
 
-    fig.tight_layout()  # otherwise the right y-label is slightly clipped
-    plt.show()
+    plt.savefig(name + '.png')
+    plt.close()
 
 
 gamma = 0.99
@@ -204,16 +204,16 @@ CSTR_PPO = []
 rewards = []
 avg_rewards = []
 
-episode_reward = []
+
 def average(lst):
     return sum(lst) / len(lst)
 returns = []
-total_timesteps = 1000000
+total_episode = 100
 y=0
-while t_so_far < total_timesteps:
-
+while y < total_episode:
+    episode_reward = 0
     y = y+1
-    print(y)
+    print("Episode",y)
     batch_obs = []
     propylene_glycol = []
     batch_acts = []
@@ -227,7 +227,7 @@ while t_so_far < total_timesteps:
     lo = 0
     while t < 4:
         ep_rews = []
-        t_so_far = t_so_far + 1
+
         obs = [0, 3.45, 0, 0, 75]
         ep_t = 0
         while ep_t < 80:
@@ -245,13 +245,15 @@ while t_so_far < total_timesteps:
             lo += (np.abs(new_obs[2] - 0.143) ** 2) * (t) ** 2
 
             obs = new_obs
+            episode_reward = episode_reward + rew
             ep_rews.append(rew)
             batch_acts.append(torch.tensor(action))
             batch_log_probs.append(log_prob)
             t = t + 0.05
         batch_rews.append(ep_rews)
         T = 4
-        plot_G(propylene_glycol, flowrate)
+        name = "./PPO/Plot_G/" + str(y)
+        plot_G(propylene_glycol, flowrate, name)
     batch_obs = torch.tensor(batch_obs, dtype=torch.float)
 
     batch_acts = torch.tensor(batch_acts, dtype=torch.float)
@@ -261,7 +263,7 @@ while t_so_far < total_timesteps:
     dt = 0.05
     T = 4
     lo = math.sqrt(lo / 80)
-    print(lo)
+    print("Episode Reward",episode_reward)
 
     V, _ = Evaluate(batch_obs, batch_acts)
     A_k = batch_rtgs - torch.squeeze(V.T, 0).detach()
@@ -270,13 +272,26 @@ while t_so_far < total_timesteps:
 
     CSTR_PPO.append(propylene_glycol)
 
-    rewards.append(rew)
+    rewards.append(episode_reward)
+    avg_rewards.append(np.mean(rewards[-10:]))
     #     avg_rewards.append(np.mean(rewards[-10:]))
 
     np.savetxt("CSTR_PPO.csv", CSTR_PPO, delimiter=",")
 
+
+
 torch.save(model1.state_dict(), 'pretrain_PPO.pt')
 
-avg_rewards = np.mean(rewards[-10:])
+
+print(avg_rewards)
+font1 = {'family': 'serif', 'size': 15}
+font2 = {'family': 'serif', 'size': 15}
+
+plt.figure()
+plt.plot(avg_rewards)
+plt.xlabel("Number of episodes", fontdict=font1)
+plt.ylabel("Average Rewards", fontdict=font2)
+plt.savefig("./PPO/Reward_Plots/" + 'Average_Rewarde_HIRO.png', bbox_inches='tight')
+plt.close()
 
 obs = [0, 3.45, 0, 0, 75]

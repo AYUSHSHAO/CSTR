@@ -218,7 +218,7 @@ class Actor_Low(nn.Module):
         #         sigma = (torch.exp((torch.tanh(self.sigma_head(x1)))))
         #         mu = 80*(abs(self.mu_head(x2)))
         #         # sigma = torch.exp((F.tanh(self.sigma_head(x1))))
-        sigma = (abs(self.sigma_head(x1)))
+        sigma = 0.5*(abs(self.sigma_head(x1)))
         return Normal(mu, sigma)
 
 
@@ -819,7 +819,7 @@ def train():
     lamda = 0.3  # subgoal testing parameter
 
     # DDPG parameters:
-    gamma = 0.99  # discount factor for future rewards
+    gamma = 0.93  # discount factor for future rewards
     # n_iter = 100                # update policy n_iter times in one DDPG update
     # changing the n_iter from 100 to 6
     n_iter = 10
