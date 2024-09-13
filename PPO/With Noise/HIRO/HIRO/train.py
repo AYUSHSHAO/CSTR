@@ -5,19 +5,14 @@ import math
 import numpy as np
 from scipy.integrate import odeint
 torch.autograd.set_detect_anomaly(True)
-# from HAC import HAC
 import matplotlib.pyplot as plt
-from transesterification import get_state
-# from CSTR import CSTR
 import random
 import torch.nn as nn
 import torch.optim as optim
-from torch import Tensor, dtype
+from torch import Tensor
 from torch.nn import functional
 import torch.nn.functional as F
 from torch.distributions import Normal
-import copy
-
 pow = math.pow
 exp = np.exp
 tanh = np.tanh
