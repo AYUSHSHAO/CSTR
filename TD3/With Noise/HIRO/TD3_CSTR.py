@@ -1,4 +1,5 @@
 import numpy as np
+import sys
 from collections import deque
 import random
 import math
@@ -288,7 +289,7 @@ action_space = spaces.Box(
     high=high,
     dtype=np.float32
 )
-print("action shape shape",action_space)
+
 agent = TD3(action_space.shape[0], observation_space.shape[0], max_action=action_space.high[0],
             min_action=action_space.low[0], num_actions=action_space.shape[0])
 
@@ -306,6 +307,10 @@ episode_reward = []
 CSTR_TD3 = []
 IAE = []
 avg_IAE = []
+
+Least_Time = sys.maxsize  # minimum time in which goal concentration is achieved
+Least_Time_Episode = 0 # episode in which least time is achieved
+
 
 directory_TD3 = "./TD3/Reward_Plots/"
 directory_TD3_plot_G = "./TD3/Plot_G/"
@@ -326,6 +331,10 @@ for episode in range(500):
     propylene_glycol = []
     flowrate = []
     x0 = [0, 3.45, 0, 0, np.random.normal(75,0.02*75)]
+
+    time_taken = 0  # time taken by the system to reach the goal concentration
+    goal_concentration_reached = False
+
     t = 0.01
     last_state = x0
     viability = []
@@ -368,11 +377,22 @@ for episode in range(500):
         iae += (np.abs(new_state_noise_2 - 0.143))
         reward = np.array(reward).flatten()
         episode_reward += reward
+
+        if last_state[2] >= 0.143 and not goal_concentration_reached:
+            goal_concentration_reached = True
+            time_taken = t
+
+
+
     print("batch: ", episode + 1, " reward: ", episode_reward)
     print("last state", last_state[2])
     #if episode == 2:
         #plot_G(propylene_glycol, flowrate)
     name = directory_TD3_plot_G+ str(episode+1)
+
+    if time_taken < Least_Time and time_taken != 0:
+        Least_Time = time_taken
+        Least_Time_Episode = episode + 1
 
     lo = math.sqrt(lo / 40)
     IAE.append(iae)
@@ -384,6 +404,10 @@ for episode in range(500):
     CSTR_TD3.append(propylene_glycol)
     plot_G(propylene_glycol, tot_time, flowrate, name)
 
+
+
+print("Least Time", Least_Time)
+print("Least Time Episode", Least_Time_Episode)
 
 np.savetxt("CSTR_TD3.csv", CSTR_TD3, delimiter=",")
 

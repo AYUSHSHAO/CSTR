@@ -829,8 +829,8 @@ def train():
 
     # save trained models
     directory = "./preTrained/{}/{}level/".format(env_name, k_level)
-    directory_HIRO = "./HIRO/Reward_Plots/"
-    directory_HIRO_plot_G = "./HIRO/Plot_G/"
+    directory_HIRO = "./Reward_Plots/"
+    directory_HIRO_plot_G = "./Plot_G/"
     filename = "HAC_{}".format(env_name)
     #########################################################
 
@@ -912,7 +912,7 @@ def train():
         name = directory_HIRO_plot_G + str(i_episode)
         plot_G(agent.propylene_glycol, tot_time, agent.flowrate, name)
 
-    np.savetxt("CSTR_HIRO.csv", agent.CSTR, delimiter=",")
+    np.savetxt("CSTR_HIRO_PPO.csv", agent.CSTR, delimiter=",")
 
     font1 = {'family': 'serif', 'size': 15}
     font2 = {'family': 'serif', 'size': 15}

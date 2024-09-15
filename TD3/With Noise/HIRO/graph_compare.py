@@ -5,22 +5,22 @@ import numpy as np
 tot_time = 4
 dt = 0.05
 # Load the CSV file into a DataFrame
-df_TD3 = pd.read_csv('/Users/ayushsharma/One_Drive_IITD/Design_Project/Codes/CSTR/TD3/With Noise/HIRO/CSTR_HIRO.csv', header=None)
+df_TD3 = pd.read_csv('/Users/ayushsharma/One_Drive_IITD/Design_Project/Codes/CSTR/TD3/With Noise/HIRO/CSTR_TD3.csv', header=None)
 df_HIRO_TD3 = pd.read_csv('/Users/ayushsharma/One_Drive_IITD/Design_Project/Codes/CSTR/TD3/With Noise/HIRO/CSTR_HIRO.csv', header=None)
-df_HIRO_PPO = pd.read_csv('/Users/ayushsharma/One_Drive_IITD/Design_Project/Codes/CSTR/PPO/With Noise/HIRO/HIRO/CSTR_HIRO.csv',header=None)
+df_HIRO_PPO = pd.read_csv('/Users/ayushsharma/One_Drive_IITD/Design_Project/Codes/CSTR/PPO/With Noise/HIRO/HIRO/CSTR_HIRO_PPO.csv', header=None)
 
-row_index_TD3 =1  # For example, to get the second row we equate to 1 (index starts from 0)
+row_index_TD3 = 0  # For example, to get the second row we equate to 1 (index starts from 0)
 specific_row_TD3 = df_TD3.iloc[row_index_TD3]
 
 print(specific_row_TD3)
 
-row_index_HIRO = 2  # For example, to get the second row we equate to 1 (index starts from 0)
-specific_row_HIRO_TD3 = df_HIRO_TD3.iloc[row_index_HIRO]
+row_index_HIRO_TD3 = 1  # For example, to get the second row we equate to 1 (index starts from 0)
+specific_row_HIRO_TD3 = df_HIRO_TD3.iloc[row_index_HIRO_TD3]
 
 print(specific_row_HIRO_TD3)
 
-row_index_HIRO = 2  # For example, to get the second row we equate to 1 (index starts from 0)
-specific_row_HIRO_PPO = df_HIRO_TD3.iloc[row_index_HIRO]
+row_index_HIRO_PPO = 298  # For example, to get the second row we equate to 1 (index starts from 0)
+specific_row_HIRO_PPO = df_HIRO_PPO.iloc[row_index_HIRO_PPO]
 
 print(specific_row_HIRO_PPO)
 
