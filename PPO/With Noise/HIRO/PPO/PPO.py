@@ -84,18 +84,18 @@ def CSTR(action, ti, x0):
 class ActorNet(nn.Module):
     def __init__(self):
         super(ActorNet, self).__init__()
-        self.fc1 = nn.Linear(5, 10)
-        self.mu_head = nn.Linear(10, 1)
-        self.sigma_head = nn.Linear(10, 1)
+        self.fc1 = nn.Linear(5, 600)
+        self.mu_head = nn.Linear(600, 1)
+        self.sigma_head = nn.Linear(600, 1)
 
     def forward(self, x):
 
-        x1 = torch.sigmoid(self.fc1(x))
-        mu = 160 * (abs(self.mu_head(x1)))
+        x1 = F.relu(self.fc1(x))
+        mu = (abs(self.mu_head(x1)))
         #         sigma = (torch.exp((torch.tanh(self.sigma_head(x1)))))
         #         mu = 80*(abs(self.mu_head(x2)))
         #         # sigma = torch.exp((F.tanh(self.sigma_head(x1))))
-        sigma = 2 * (abs(self.sigma_head(x1)))
+        sigma = (abs(self.sigma_head(x1)))
         return Normal(mu, sigma)
 
 class CriticNet(nn.Module):
@@ -110,7 +110,7 @@ class CriticNet(nn.Module):
         state_value = self.v_head(x)
         return state_value
 
-seed = 123
+seed = 12369
 random.seed(seed)
 torch.manual_seed(seed)
 np.random.seed(seed)
@@ -162,7 +162,7 @@ def compute_rtgs(batch_rews):
     return batch_rtgs
 
 
-def Evaluate(batch_obs, batch_act):
+def Evaluate(batch_obs, batch_acts):
     dist = model1(batch_obs)
     V = model2(batch_obs)
     log_probs = dist.log_prob(torch.unsqueeze(batch_acts,1))
@@ -190,11 +190,10 @@ def PPO(ppo_epochs, batch_obs, batch_acts, batch_log_probs, A_k, batch_rtgs):
   #plt.show()
 
 
-# seed = 100
-seed = 50
-random.seed(seed)
-torch.manual_seed(seed)
-np.random.seed(seed)
+
+
+
+
 
 t_so_far = 0
 i_so_far = 0
@@ -207,6 +206,7 @@ avg_rewards = []
 
 def average(lst):
     return sum(lst) / len(lst)
+
 returns = []
 total_episode = 100
 y=0
@@ -238,6 +238,7 @@ while y < total_episode:
             action = dist.sample()
             action = abs(action)
             B = action.numpy()
+            B = np.clip(B, 70, 82)
             flowrate.append(B)
             log_prob = dist.log_prob(action)
             new_obs, rew = CSTR(B, t, obs)
@@ -252,7 +253,7 @@ while y < total_episode:
             t = t + 0.05
         batch_rews.append(ep_rews)
         T = 4
-        name = "./PPO/Plot_G/" + str(y)
+        name = "./Plot_G/" + str(y)
         plot_G(propylene_glycol, flowrate, name)
     batch_obs = torch.tensor(batch_obs, dtype=torch.float)
 
@@ -291,7 +292,7 @@ plt.figure()
 plt.plot(avg_rewards)
 plt.xlabel("Number of episodes", fontdict=font1)
 plt.ylabel("Average Rewards", fontdict=font2)
-plt.savefig("./PPO/Reward_Plots/" + 'Average_Rewarde_HIRO.png', bbox_inches='tight')
+plt.savefig("./Reward_Plots/" + 'Average_Rewarde_HIRO.png', bbox_inches='tight')
 plt.close()
 
 obs = [0, 3.45, 0, 0, 75]

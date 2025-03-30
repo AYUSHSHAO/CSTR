@@ -585,15 +585,7 @@ class HAC:
             return False
         return True
 
-    def norm_action(self, action):
-        low = -1
-        high = 1
 
-        action = ((action - low) / (high - low))
-
-        action = 78 + action
-
-        return action
 
     def run_HAC(self, env, i_level, state, tot_time, test):
 
